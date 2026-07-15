@@ -1,0 +1,143 @@
+const crypto = require('crypto');
+const express = require('express');
+const cors = require('cors');
+
+const app = express();
+
+const TARGET_BASE = process.env.HG_TARGET_BASE_URL || 'https://app.hourglass-app.com';
+const PORT = Number(process.env.HG_PROXY_PORT || 3001);
+const API_PREFIX = '/api/v0.2';
+const HANDOFF_TTL_MS = Number(process.env.HG_HANDOFF_TTL_MS || 120000);
+
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
+
+function randomToken(size = 24) {
+  return crypto.randomBytes(size).toString('hex');
+}
+
+function pickForwardHeaders(req) {
+  const headers = { ...req.headers };
+  delete headers.host;
+  delete headers['content-length'];
+  return headers;
+}
+
+const handoffs = new Map();
+
+function cleanupHandoffs() {
+  const now = Date.now();
+  for (const [id, value] of handoffs.entries()) {
+    if (value.expiresAt <= now) handoffs.delete(id);
+  }
+}
+
+setInterval(cleanupHandoffs, 10000).unref();
+
+app.post('/auth-handoff/create', (_req, res) => {
+  const id = crypto.randomUUID();
+  const submitToken = randomToken(16);
+  const pollToken = randomToken(16);
+  const expiresAt = Date.now() + HANDOFF_TTL_MS;
+
+  handoffs.set(id, {
+    id,
+    submitToken,
+    pollToken,
+    expiresAt,
+    status: 'pending',
+    auth: null,
+  });
+
+  res.json({ id, submitToken, pollToken, expiresAt });
+});
+
+app.post('/auth-handoff/submit/:id', (req, res) => {
+  cleanupHandoffs();
+
+  const { id } = req.params;
+  const item = handoffs.get(id);
+  if (!item) return res.status(404).json({ error: 'handoff_not_found' });
+
+  const { submitToken, jwt, xsrfToken, userUuid } = req.body || {};
+  if (submitToken !== item.submitToken) {
+    return res.status(401).json({ error: 'invalid_submit_token' });
+  }
+
+  if (!jwt && !xsrfToken) {
+    return res.status(400).json({ error: 'missing_auth_payload' });
+  }
+
+  item.status = 'ready';
+  item.auth = {
+    jwt: String(jwt || xsrfToken || ''),
+    xsrfToken: String(xsrfToken || jwt || ''),
+    userUuid: userUuid ? String(userUuid) : null,
+  };
+
+  handoffs.set(id, item);
+  return res.json({ ok: true });
+});
+
+app.get('/auth-handoff/status/:id', (req, res) => {
+  cleanupHandoffs();
+
+  const { id } = req.params;
+  const item = handoffs.get(id);
+  if (!item) return res.status(404).json({ error: 'handoff_not_found_or_expired' });
+
+  const pollToken = String(req.query.pollToken || '');
+  if (!pollToken || pollToken !== item.pollToken) {
+    return res.status(401).json({ error: 'invalid_poll_token' });
+  }
+
+  if (item.status !== 'ready' || !item.auth) {
+    return res.json({ status: 'pending', expiresAt: item.expiresAt });
+  }
+
+  const auth = item.auth;
+  handoffs.delete(id);
+  return res.json({ status: 'ready', auth });
+});
+
+app.use(`${API_PREFIX}/*splat`, async (req, res) => {
+  const search = req.originalUrl.includes('?') ? `?${req.originalUrl.split('?')[1]}` : '';
+  const path = req.originalUrl.split('?')[0];
+  const targetUrl = `${TARGET_BASE}${path}${search}`;
+
+  try {
+    const upstream = await fetch(targetUrl, {
+      method: req.method,
+      headers: pickForwardHeaders(req),
+      body: req.method === 'GET' || req.method === 'HEAD' ? undefined : JSON.stringify(req.body),
+    });
+
+    res.status(upstream.status);
+
+    upstream.headers.forEach((value, key) => {
+      if (key.toLowerCase() === 'transfer-encoding') return;
+      res.setHeader(key, value);
+    });
+
+    const text = await upstream.text();
+    res.send(text);
+  } catch (error) {
+    res.status(502).json({
+      error: 'Proxy upstream error',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+});
+
+app.get('/health', (_req, res) => {
+  res.json({
+    ok: true,
+    target: `${TARGET_BASE}${API_PREFIX}`,
+    activeHandoffs: handoffs.size,
+  });
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[hourglass-proxy] running on http://0.0.0.0:${PORT}`);
+  console.log(`[hourglass-proxy] forwarding ${API_PREFIX} -> ${TARGET_BASE}${API_PREFIX}`);
+});
