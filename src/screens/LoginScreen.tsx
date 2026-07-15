@@ -166,7 +166,9 @@ export default function LoginScreen({ onLoggedIn }: Props) {
         }
 
         if (data?.status === 'ready' && data?.auth) {
-          const nextToken = String(data.auth.jwt || data.auth.xsrfToken || '');
+          const handoffJwt = String(data.auth.jwt || '');
+          const handoffXsrf = String(data.auth.xsrfToken || '');
+          const nextToken = handoffJwt.startsWith('ey') ? handoffJwt : handoffXsrf;
           if (nextToken) {
             setWebStatus('Authentification reçue. Connexion...');
             await signIn(nextToken);

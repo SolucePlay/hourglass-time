@@ -44,6 +44,18 @@ export default function WebAuthScannerScreen() {
 
   const canSubmitAuth = useMemo(() => Boolean(jwt || xsrfToken), [jwt, xsrfToken]);
 
+  const normalizedJwt = useMemo(() => {
+    const value = String(jwt || '').trim();
+    return value.startsWith('ey') ? value : null;
+  }, [jwt]);
+
+  const normalizedXsrf = useMemo(() => {
+    const primary = String(xsrfToken || '').trim();
+    if (primary) return primary;
+    const fallback = String(jwt || '').trim();
+    return fallback || null;
+  }, [jwt, xsrfToken]);
+
   const submitHandoff = useCallback(
     async (payload: QrPayload) => {
       if (!canSubmitAuth) {
@@ -63,8 +75,8 @@ export default function WebAuthScannerScreen() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             submitToken: payload.submitToken,
-            jwt: jwt || xsrfToken,
-            xsrfToken: xsrfToken || jwt,
+            jwt: normalizedJwt,
+            xsrfToken: normalizedXsrf,
             userUuid,
           }),
         });
@@ -82,7 +94,7 @@ export default function WebAuthScannerScreen() {
         setBusy(false);
       }
     },
-    [canSubmitAuth, jwt, userUuid, xsrfToken]
+    [canSubmitAuth, normalizedJwt, normalizedXsrf, userUuid]
   );
 
   if (Platform.OS === 'web') {
