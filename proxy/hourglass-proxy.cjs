@@ -35,6 +35,13 @@ app.use('/auth-code', (_req, res, next) => {
   next();
 });
 
+app.use('/debug', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 function randomToken(size = 24) {
   return crypto.randomBytes(size).toString('hex');
 }
@@ -44,6 +51,23 @@ function pickForwardHeaders(req) {
   delete headers.host;
   delete headers['content-length'];
   return headers;
+}
+
+function decodeMaybe(value) {
+  try {
+    return decodeURIComponent(String(value || ''));
+  } catch {
+    return String(value || '');
+  }
+}
+
+function extractCookieToken(source, key) {
+  const raw = String(source || '');
+  if (!raw) return null;
+  const regex = new RegExp(`(?:^|[;\\s])${key}=([^;]+)`, 'i');
+  const match = raw.match(regex);
+  if (!match || !match[1]) return null;
+  return decodeMaybe(match[1]).trim();
 }
 
 async function validateAuthAgainstWhoami(auth) {
@@ -261,6 +285,63 @@ app.get('/auth-code/status/:sessionId', (req, res) => {
   codeSessions.delete(sessionId);
   res.removeHeader('ETag');
   return res.json({ status: 'ready', auth });
+});
+
+app.get('/debug/whoami', async (req, res) => {
+  const rawCookie = decodeMaybe(req.query.cookie || req.query.cookies || '');
+  const jwtFromCookie = extractCookieToken(rawCookie, 'hglogin');
+  const xsrfFromCookie =
+    extractCookieToken(rawCookie, 'X-Hourglass-XSRF-Token') ||
+    extractCookieToken(rawCookie, 'x-hourglass-xsrf-token');
+
+  const jwt = decodeMaybe(req.query.hglogin || req.query.jwt || jwtFromCookie || '').trim();
+  const xsrfToken = decodeMaybe(req.query.xsrf || req.query.xsrfToken || xsrfFromCookie || '').trim();
+
+  if (!jwt && !xsrfToken) {
+    return res.status(400).json({
+      error: 'missing_auth_query',
+      usage:
+        '/debug/whoami?hglogin=<JWT>&xsrf=<XSRF_TOKEN> or /debug/whoami?cookie=hglogin%3D...%3B%20X-Hourglass-XSRF-Token%3D...'
+    });
+  }
+
+  const headers = {
+    Accept: 'application/json',
+  };
+  if (xsrfToken) headers['X-Hourglass-XSRF-Token'] = xsrfToken;
+  if (jwt) headers.Authorization = `Bearer ${jwt}`;
+
+  const targetUrl = `${TARGET_BASE}${API_PREFIX}/fsreport/whoami`;
+
+  try {
+    const upstream = await fetch(targetUrl, {
+      method: 'GET',
+      headers,
+    });
+
+    const rawText = await upstream.text();
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      parsed = rawText;
+    }
+
+    return res.status(upstream.status).json({
+      ok: upstream.ok,
+      upstreamStatus: upstream.status,
+      request: {
+        url: targetUrl,
+        headers,
+      },
+      response: parsed,
+    });
+  } catch (error) {
+    return res.status(502).json({
+      error: 'debug_whoami_failed',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 });
 
 app.use(`${API_PREFIX}/*splat`, async (req, res) => {
