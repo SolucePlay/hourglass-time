@@ -201,6 +201,7 @@ export default function LoginScreen({ onLoggedIn }: Props) {
   const capturedRef = useRef(false);
   const pendingXsrfRef = useRef<string | null>(null);
   const pendingJwtRef = useRef<string | null>(null);
+  const firstXsrfSeenAtRef = useRef<number | null>(null);
   const finalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [manualInput, setManualInput] = useState('');
@@ -353,7 +354,10 @@ export default function LoginScreen({ onLoggedIn }: Props) {
           }
         }
 
-        if (xsrf) pendingXsrfRef.current = xsrf;
+        if (xsrf) {
+          pendingXsrfRef.current = xsrf;
+          if (!firstXsrfSeenAtRef.current) firstXsrfSeenAtRef.current = Date.now();
+        }
         if (bearerJwt) pendingJwtRef.current = bearerJwt;
 
         const tryFinalize = async () => {
@@ -367,7 +371,7 @@ export default function LoginScreen({ onLoggedIn }: Props) {
           onLoggedIn();
         };
 
-        // If Bearer arrives, complete immediately; otherwise wait a bit for it.
+        // If Bearer arrives, complete immediately; otherwise keep listening longer.
         if (pendingJwtRef.current) {
           if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
           await tryFinalize();
@@ -376,9 +380,11 @@ export default function LoginScreen({ onLoggedIn }: Props) {
 
         if (pendingXsrfRef.current) {
           if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+          const deadline = (firstXsrfSeenAtRef.current || Date.now()) + 15000;
+          const waitMs = Math.max(250, deadline - Date.now());
           finalizeTimerRef.current = setTimeout(() => {
             void tryFinalize();
-          }, 1200);
+          }, waitMs);
         }
       } catch (e) {}
     },
