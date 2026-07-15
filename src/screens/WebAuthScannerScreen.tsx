@@ -60,6 +60,13 @@ export default function WebAuthScannerScreen() {
 
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
+          if (data?.error === 'invalid_auth_for_whoami') {
+            const jwtPreview = normalizedJwt ? `${normalizedJwt.slice(0, 8)}...` : 'none';
+            const xsrfPreview = normalizedXsrf ? `${normalizedXsrf.slice(0, 8)}...` : 'none';
+            throw new Error(
+              `invalid_auth_for_whoami (jwt=${jwtPreview}, xsrf=${xsrfPreview}). Reconnecte-toi sur mobile puis reessaie.`
+            );
+          }
           throw new Error(String(data?.error || 'submit_failed'));
         }
 
@@ -88,6 +95,9 @@ export default function WebAuthScannerScreen() {
         <Card.Title title="Connexion web par code" />
         <Card.Content>
           <Text>Entre le code à 6 chiffres affiché sur le PC.</Text>
+          <Text style={{ marginTop: 8, color: theme.colors.onSurfaceVariant }}>
+            Etat token mobile: JWT {normalizedJwt ? 'OK' : 'absent'} | XSRF {normalizedXsrf ? 'OK' : 'absent'}
+          </Text>
           <TextInput
             value={code}
             onChangeText={(text) => setCode(text.replace(/[^0-9]/g, '').slice(0, 6))}
