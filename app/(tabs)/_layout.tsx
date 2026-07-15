@@ -26,7 +26,6 @@ import WeekendProgrammes from './programmes/weekend';
 // Import des écrans Assemblée
 import AssembleeIndexScreen from './assemblee/index';
 import AssembleeSettingsScreen from './assemblee/settings';
-import WebAuthScannerRoute from './assemblee/web-auth-scanner';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -98,7 +97,11 @@ function AssembleeStack() {
       <Stack.Screen name="assemblee_index" component={AssembleeIndexScreen} options={{ title: 'Assemblée' }} />
       <Stack.Screen name="territoires" component={TerritoriesAccueil} options={{ title: 'Mes territoires' }} />
       <Stack.Screen name="settings" component={AssembleeSettingsScreen} options={{ title: 'Paramètres' }} />
-      <Stack.Screen name="web_auth_scanner" component={WebAuthScannerRoute} options={{ title: 'Scanner QR web' }} />
+      <Stack.Screen
+        name="web_auth_scanner"
+        getComponent={() => require('../../src/screens/WebAuthScannerScreen').default}
+        options={{ title: 'Scanner QR web' }}
+      />
     </Stack.Navigator>
   );
 }

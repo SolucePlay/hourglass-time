@@ -46,7 +46,6 @@ function buildHeaders({ jwt, xsrfToken }: AuthTokens): HeadersInit {
   const headers: Record<string, string> = {
     'X-Hourglass-XSRF-Token': xsrfToken,
     Accept: 'application/json',
-    'Content-Type': 'application/json',
   };
   
   // N'envoie le Bearer que si c'est un vrai JWT (commence par "ey")
@@ -126,14 +125,25 @@ export function getCurrentWeek(): { monday: string; sunday: string } {
 
 // Petit cache mémoire pour éviter d'appeler /fsreport/whoami à chaque écran
 let whoamiCache: any = null;
+let whoamiPromise: Promise<any | null> | null = null;
 
 export async function getWhoami(auth: AuthTokens, force = false): Promise<any | null> {
   if (whoamiCache && !force) return whoamiCache;
-  const data = await hgGet('/fsreport/whoami', auth);
-  if (data) whoamiCache = data;
-  return data;
+  if (whoamiPromise && !force) return whoamiPromise;
+
+  whoamiPromise = hgGet('/fsreport/whoami', auth)
+    .then((data) => {
+      if (data) whoamiCache = data;
+      return data;
+    })
+    .finally(() => {
+      whoamiPromise = null;
+    });
+
+  return whoamiPromise;
 }
 
 export function clearWhoamiCache() {
   whoamiCache = null;
+  whoamiPromise = null;
 }

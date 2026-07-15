@@ -51,12 +51,13 @@ const INJECTED_JS = `
 `;
 
 export default function AccueilScreen() {
-  const { jwt, xsrfToken, signIn } = useAuth();
+  const { jwt, xsrfToken, signIn, signOut } = useAuth();
   const theme = useTheme();
   const navigation = useNavigation<any>();
   const [reports, setReports] = useState<any[]>([]);
   const [territories, setTerritories] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capturedRef = useRef(false);
@@ -64,16 +65,33 @@ export default function AccueilScreen() {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <IconButton
-          icon="refresh"
-          size={22}
-          disabled={refreshing}
-          loading={refreshing}
-          onPress={handleRefreshTokens}
-        />
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <IconButton
+            icon="refresh"
+            size={22}
+            disabled={refreshing || signingOut}
+            loading={refreshing}
+            onPress={handleRefreshTokens}
+          />
+          <IconButton
+            icon="logout-variant"
+            size={22}
+            disabled={refreshing || signingOut}
+            loading={signingOut}
+            onPress={async () => {
+              if (signingOut) return;
+              setSigningOut(true);
+              try {
+                await signOut();
+              } finally {
+                setSigningOut(false);
+              }
+            }}
+          />
+        </View>
       ),
     });
-  }, [navigation, refreshing]);
+  }, [navigation, refreshing, signingOut, signOut]);
 
   useEffect(() => {
     (async () => {
