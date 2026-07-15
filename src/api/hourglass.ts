@@ -8,6 +8,60 @@ export interface AuthTokens {
   xsrfToken: string;
 }
 
+function decodeCookieValue(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function extractCookieToken(source: string | null | undefined, key: string): string | null {
+  const raw = String(source || '');
+  if (!raw) return null;
+
+  const regex = new RegExp(`(?:^|[;\\s])${key}=([^;]+)`, 'i');
+  const match = raw.match(regex);
+  if (!match?.[1]) return null;
+  return decodeCookieValue(match[1].trim());
+}
+
+function extractJwtCandidate(value: string | null | undefined): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (raw.startsWith('ey')) return raw;
+
+  const fromCookie = extractCookieToken(raw, 'hglogin');
+  if (fromCookie && fromCookie.startsWith('ey')) return fromCookie;
+
+  const match = raw.match(/eyJ[\w-]*\.[\w-]*\.[\w-]*/);
+  return match ? match[0] : null;
+}
+
+function extractXsrfCandidate(value: string | null | undefined): string | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  const fromCookie =
+    extractCookieToken(raw, 'X-Hourglass-XSRF-Token') ||
+    extractCookieToken(raw, 'x-hourglass-xsrf-token');
+
+  return fromCookie || raw;
+}
+
+function normalizeAuthTokens({ jwt, xsrfToken }: AuthTokens): AuthTokens {
+  const normalizedJwt = extractJwtCandidate(jwt);
+  const normalizedXsrf =
+    extractXsrfCandidate(xsrfToken) ||
+    extractXsrfCandidate(jwt) ||
+    '';
+
+  return {
+    jwt: normalizedJwt || '',
+    xsrfToken: normalizedXsrf,
+  };
+}
+
 function normalizeProxyBaseForWeb(proxyBase: string): string {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return proxyBase;
 
@@ -45,24 +99,26 @@ export function getRelayBaseUrl(): string | null {
 }
 
 function buildHeaders({ jwt, xsrfToken }: AuthTokens): HeadersInit {
+  const normalized = normalizeAuthTokens({ jwt, xsrfToken });
   const headers: Record<string, string> = {
-    'X-Hourglass-XSRF-Token': xsrfToken,
+    'X-Hourglass-XSRF-Token': normalized.xsrfToken,
     Accept: 'application/json',
   };
   
   // N'envoie le Bearer que si c'est un vrai JWT (commence par "ey")
   // Sinon le serveur rejette silencieusement la requête
-  if (jwt && jwt.startsWith('ey')) {
-    headers['Authorization'] = `Bearer ${jwt}`;
+  if (normalized.jwt && normalized.jwt.startsWith('ey')) {
+    headers['Authorization'] = `Bearer ${normalized.jwt}`;
   }
   
   return headers;
 }
 
 function buildHeadersWithForcedBearer({ jwt, xsrfToken }: AuthTokens): HeadersInit {
-  const headers = buildHeaders({ jwt, xsrfToken }) as Record<string, string>;
-  if (jwt) {
-    headers.Authorization = `Bearer ${jwt}`;
+  const normalized = normalizeAuthTokens({ jwt, xsrfToken });
+  const headers = buildHeaders(normalized) as Record<string, string>;
+  if (normalized.jwt) {
+    headers.Authorization = `Bearer ${normalized.jwt}`;
   }
   return headers;
 }
