@@ -126,14 +126,24 @@ export function getCurrentWeek(): { monday: string; sunday: string } {
 // Petit cache mémoire pour éviter d'appeler /fsreport/whoami à chaque écran
 let whoamiCache: any = null;
 let whoamiPromise: Promise<any | null> | null = null;
+let whoamiLastFailureAt = 0;
+const WHOAMI_FAILURE_COOLDOWN_MS = 15000;
 
 export async function getWhoami(auth: AuthTokens, force = false): Promise<any | null> {
   if (whoamiCache && !force) return whoamiCache;
   if (whoamiPromise && !force) return whoamiPromise;
+  if (!force && Date.now() - whoamiLastFailureAt < WHOAMI_FAILURE_COOLDOWN_MS) {
+    return null;
+  }
 
   whoamiPromise = hgGet('/fsreport/whoami', auth)
     .then((data) => {
-      if (data) whoamiCache = data;
+      if (data) {
+        whoamiCache = data;
+        whoamiLastFailureAt = 0;
+      } else {
+        whoamiLastFailureAt = Date.now();
+      }
       return data;
     })
     .finally(() => {
@@ -146,4 +156,5 @@ export async function getWhoami(auth: AuthTokens, force = false): Promise<any | 
 export function clearWhoamiCache() {
   whoamiCache = null;
   whoamiPromise = null;
+  whoamiLastFailureAt = 0;
 }
