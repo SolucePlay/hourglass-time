@@ -14,11 +14,31 @@ const SPOOFED_USER_AGENT =
 
 const INJECTED_JS = `
 (function () {
+  function extractJwtCandidate(value) {
+    try {
+      if (!value) return null;
+      var text = String(value);
+      var match = text.match(/eyJ[\\w-]*\\.[\\w-]*\\.[\\w-]*/);
+      return match ? match[0] : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function post(type, payload) {
     try {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, payload: payload }));
     } catch (e) {}
   }
+
+  function reportJwtCandidate(value, source) {
+    var jwt = extractJwtCandidate(value);
+    if (jwt) post('jwt_candidate', { token: jwt, source: source });
+  }
+
+  try {
+    reportJwtCandidate(document.cookie, 'document_cookie');
+  } catch (e) {}
 
   var originalFetch = window.fetch;
   window.fetch = function (input, init) {
@@ -30,6 +50,7 @@ const INJECTED_JS = `
         h.forEach(function (v, k) { headerObj[k] = v; });
       }
       post('fetch', { headers: headerObj });
+      reportJwtCandidate(JSON.stringify(headerObj), 'fetch_headers');
     } catch (e) {}
     return originalFetch.apply(this, arguments);
   };
@@ -43,9 +64,18 @@ const INJECTED_JS = `
   XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
     try {
       post('xhr_header', { name: name, value: value });
+      if (String(name).toLowerCase() === 'authorization') {
+        reportJwtCandidate(value, 'xhr_authorization');
+      }
     } catch (e) {}
     return originalSetHeader.apply(this, arguments);
   };
+
+  try {
+    setInterval(function () {
+      reportJwtCandidate(document.cookie, 'document_cookie_poll');
+    }, 1000);
+  } catch (e) {}
   true;
 })();
 `;
@@ -61,6 +91,9 @@ export default function AccueilScreen() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capturedRef = useRef(false);
+  const pendingXsrfRef = useRef<string | null>(null);
+  const pendingJwtRef = useRef<string | null>(null);
+  const finalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -107,6 +140,9 @@ export default function AccueilScreen() {
       if (refreshTimeoutRef.current) {
         clearTimeout(refreshTimeoutRef.current);
       }
+      if (finalizeTimerRef.current) {
+        clearTimeout(finalizeTimerRef.current);
+      }
     };
   }, []);
 
@@ -115,12 +151,20 @@ export default function AccueilScreen() {
       clearTimeout(refreshTimeoutRef.current);
       refreshTimeoutRef.current = null;
     }
+    if (finalizeTimerRef.current) {
+      clearTimeout(finalizeTimerRef.current);
+      finalizeTimerRef.current = null;
+    }
+    pendingXsrfRef.current = null;
+    pendingJwtRef.current = null;
     capturedRef.current = false;
     setRefreshing(false);
   }
 
   async function handleRefreshTokens() {
     if (!jwt || !xsrfToken || refreshing) return;
+    pendingXsrfRef.current = null;
+    pendingJwtRef.current = null;
     capturedRef.current = false;
     setRefreshing(true);
     setRefreshNonce((value) => value + 1);
@@ -135,19 +179,57 @@ export default function AccueilScreen() {
       const data = JSON.parse(event.nativeEvent.data);
       if (capturedRef.current) return;
 
-      let xsrf = null;
+      let xsrf: string | null = null;
+      let bearerJwt: string | null = null;
+
+      const readBearer = (value?: string) => {
+        if (!value) return null;
+        const match = String(value).match(/^Bearer\s+(.+)$/i);
+        return match?.[1] ?? null;
+      };
+
       if (data.type === 'fetch') {
         xsrf = data.payload?.headers?.['X-Hourglass-XSRF-Token'] || data.payload?.headers?.['x-hourglass-xsrf-token'];
+        bearerJwt = readBearer(data.payload?.headers?.Authorization) || readBearer(data.payload?.headers?.authorization);
       } else if (data.type === 'xhr_header') {
-        if (data.payload?.name?.toLowerCase() === 'x-hourglass-xsrf-token') {
+        const headerName = String(data.payload?.name || '').toLowerCase();
+        if (headerName === 'x-hourglass-xsrf-token') {
           xsrf = data.payload?.value;
+        }
+        if (headerName === 'authorization') {
+          bearerJwt = readBearer(data.payload?.value);
+        }
+      } else if (data.type === 'jwt_candidate') {
+        const candidate = String(data.payload?.token || '').trim();
+        if (candidate.startsWith('ey')) {
+          bearerJwt = candidate;
         }
       }
 
-      if (xsrf) {
+      if (xsrf) pendingXsrfRef.current = xsrf;
+      if (bearerJwt) pendingJwtRef.current = bearerJwt;
+
+      const tryFinalize = async () => {
+        if (capturedRef.current) return;
+        const finalToken = pendingJwtRef.current || pendingXsrfRef.current;
+        if (!finalToken) return;
+
         capturedRef.current = true;
-        await signIn(xsrf);
+        await signIn(finalToken);
         stopRefreshing();
+      };
+
+      if (pendingJwtRef.current) {
+        if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+        await tryFinalize();
+        return;
+      }
+
+      if (pendingXsrfRef.current) {
+        if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+        finalizeTimerRef.current = setTimeout(() => {
+          void tryFinalize();
+        }, 4000);
       }
     } catch {
       // silent background refresh
@@ -175,9 +257,27 @@ export default function AccueilScreen() {
     },
   ];
 
+  const normalizedJwt = jwt?.startsWith('ey') ? jwt : null;
+  const normalizedXsrf = xsrfToken || null;
+  const activeTokenType = normalizedJwt ? 'JWT' : 'XSRF';
+  const debugWhoamiLink =
+    normalizedJwt && normalizedXsrf
+      ? `https://hourglass-proxy.onrender.com/debug/whoami?hglogin=${encodeURIComponent(normalizedJwt)}&xsrf=${encodeURIComponent(normalizedXsrf)}`
+      : 'absent';
+
   return (
     <>
       <ScrollView style={{ backgroundColor: theme.colors.background }} contentContainerStyle={{ padding: 16 }}>
+        <Card style={{ marginBottom: 10 }}>
+          <Card.Title title="État tokens" />
+          <Card.Content>
+            <Text>Token actif: {activeTokenType}</Text>
+            <Text style={{ marginTop: 6 }}>JWT: {normalizedJwt || 'absent'}</Text>
+            <Text style={{ marginTop: 6 }}>XSRF: {normalizedXsrf || 'absent'}</Text>
+            <Text style={{ marginTop: 6 }}>Lien web complet: {debugWhoamiLink}</Text>
+          </Card.Content>
+        </Card>
+
         <View style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
         {tiles.map((tile) => (
           <Card
