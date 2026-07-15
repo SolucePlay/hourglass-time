@@ -239,6 +239,10 @@ export default function LoginScreen({ onLoggedIn }: Props) {
   const tryManualSignIn = useCallback(async () => {
     const value = manualInput.trim();
     if (!value) return;
+    if (Platform.OS === 'web' && !value.startsWith('ey')) {
+      setWebStatus('Token invalide pour le web: un JWT Bearer est requis (prefixe ey...).');
+      return;
+    }
     await signIn(value);
     onLoggedIn();
   }, [manualInput, onLoggedIn, signIn]);
@@ -275,12 +279,13 @@ export default function LoginScreen({ onLoggedIn }: Props) {
 
         if (data?.status === 'ready' && data?.auth) {
           const handoffJwt = String(data.auth.jwt || '');
-          const handoffXsrf = String(data.auth.xsrfToken || '');
-          const nextToken = handoffJwt.startsWith('ey') ? handoffJwt : handoffXsrf;
-          if (nextToken) {
+          if (handoffJwt.startsWith('ey')) {
             setWebStatus('Authentification reçue. Connexion...');
-            await signIn(nextToken);
+            await signIn(handoffJwt);
             onLoggedIn();
+          } else {
+            setWebStatus('Code validé, mais le mobile a transmis un token non JWT. Reconnecte le téléphone puis regénère un code.');
+            setCodeSession(null);
           }
         }
       } catch {
