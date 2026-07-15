@@ -12,11 +12,64 @@ const SPOOFED_USER_AGENT =
 
 const INJECTED_JS = `
 (function () {
+  function extractJwtCandidate(value) {
+    try {
+      if (!value) return null;
+      var text = String(value);
+      var match = text.match(/eyJ[\w-]*\.[\w-]*\.[\w-]*/);
+      return match ? match[0] : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function post(type, payload) {
     try {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: type, payload: payload }));
     } catch (e) {}
   }
+
+  function reportJwtCandidate(value, source) {
+    var jwt = extractJwtCandidate(value);
+    if (jwt) post('jwt_candidate', { token: jwt, source: source });
+  }
+
+  try {
+    reportJwtCandidate(window.location.href, 'location_href');
+    reportJwtCandidate(window.location.hash, 'location_hash');
+  } catch (e) {}
+
+  try {
+    for (var i = 0; i < localStorage.length; i++) {
+      var key = localStorage.key(i);
+      if (!key) continue;
+      reportJwtCandidate(localStorage.getItem(key), 'local_storage:' + key);
+    }
+  } catch (e) {}
+
+  try {
+    for (var j = 0; j < sessionStorage.length; j++) {
+      var skey = sessionStorage.key(j);
+      if (!skey) continue;
+      reportJwtCandidate(sessionStorage.getItem(skey), 'session_storage:' + skey);
+    }
+  } catch (e) {}
+
+  try {
+    var originalLocalSetItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = function (key, value) {
+      reportJwtCandidate(value, 'local_storage_set:' + key);
+      return originalLocalSetItem(key, value);
+    };
+  } catch (e) {}
+
+  try {
+    var originalSessionSetItem = sessionStorage.setItem.bind(sessionStorage);
+    sessionStorage.setItem = function (key, value) {
+      reportJwtCandidate(value, 'session_storage_set:' + key);
+      return originalSessionSetItem(key, value);
+    };
+  } catch (e) {}
 
   var originalFetch = window.fetch;
   window.fetch = function (input, init) {
@@ -28,6 +81,7 @@ const INJECTED_JS = `
         h.forEach(function (v, k) { headerObj[k] = v; });
       }
       post('fetch', { headers: headerObj });
+      reportJwtCandidate(JSON.stringify(headerObj), 'fetch_headers');
     } catch (e) {}
     return originalFetch.apply(this, arguments);
   };
@@ -41,9 +95,20 @@ const INJECTED_JS = `
   XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
     try {
       post('xhr_header', { name: name, value: value });
+      if (String(name).toLowerCase() === 'authorization') {
+        reportJwtCandidate(value, 'xhr_authorization');
+      }
     } catch (e) {}
     return originalSetHeader.apply(this, arguments);
   };
+
+  try {
+    setInterval(function () {
+      reportJwtCandidate(window.location.href, 'location_poll');
+      reportJwtCandidate(window.location.hash, 'hash_poll');
+    }, 1000);
+  } catch (e) {}
+
   true;
 })();
 `;
@@ -223,6 +288,11 @@ export default function LoginScreen({ onLoggedIn }: Props) {
           }
           if (headerName === 'authorization') {
             bearerJwt = readBearer(data.payload?.value);
+          }
+        } else if (data.type === 'jwt_candidate') {
+          const candidate = String(data.payload?.token || '').trim();
+          if (candidate.startsWith('ey')) {
+            bearerJwt = candidate;
           }
         }
 
