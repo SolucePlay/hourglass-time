@@ -186,6 +186,26 @@ type WebViewMessageEvent = {
   nativeEvent: { data: string };
 };
 
+function extractJwtFromManualInput(input: string): string | null {
+  const raw = input.trim();
+  if (!raw) return null;
+  if (raw.startsWith('ey')) return raw;
+
+  const cookieMatch = raw.match(/(?:^|[;\s])hglogin=([^;]+)/i);
+  if (cookieMatch?.[1]) {
+    try {
+      const cookieJwt = decodeURIComponent(cookieMatch[1].trim());
+      if (cookieJwt.startsWith('ey')) return cookieJwt;
+    } catch {
+      const cookieJwt = cookieMatch[1].trim();
+      if (cookieJwt.startsWith('ey')) return cookieJwt;
+    }
+  }
+
+  const inlineJwt = raw.match(/eyJ[\w-]*\.[\w-]*\.[\w-]*/);
+  return inlineJwt ? inlineJwt[0] : null;
+}
+
 export default function LoginScreen({ onLoggedIn }: Props) {
   const { signIn } = useAuth();
   const theme = useTheme();
@@ -241,11 +261,12 @@ export default function LoginScreen({ onLoggedIn }: Props) {
   const tryManualSignIn = useCallback(async () => {
     const value = manualInput.trim();
     if (!value) return;
-    if (Platform.OS === 'web' && !value.startsWith('ey')) {
-      setWebStatus('Token invalide pour le web: un JWT Bearer est requis (prefixe ey...).');
+    const jwtFromInput = extractJwtFromManualInput(value);
+    if (Platform.OS === 'web' && !jwtFromInput) {
+      setWebStatus('Entrée invalide: colle un JWT (ey...) ou une chaîne Cookie contenant hglogin=...');
       return;
     }
-    await signIn(value);
+    await signIn(jwtFromInput || value);
     onLoggedIn();
   }, [manualInput, onLoggedIn, signIn]);
 
@@ -413,7 +434,7 @@ export default function LoginScreen({ onLoggedIn }: Props) {
             <TextInput
               value={manualInput}
               onChangeText={setManualInput}
-              placeholder="Colle ici ton token (si besoin)"
+              placeholder="JWT (ey...) ou Cookie avec hglogin=..."
               autoCapitalize="none"
               autoCorrect={false}
               style={styles.input}
