@@ -5,11 +5,20 @@ const cors = require('cors');
 const app = express();
 
 const TARGET_BASE = process.env.HG_TARGET_BASE_URL || 'https://app.hourglass-app.com';
-const PORT = Number(process.env.HG_PROXY_PORT || 3001);
+const PORT = Number(process.env.PORT || process.env.HG_PROXY_PORT || 3001);
 const API_PREFIX = '/api/v0.2';
 const HANDOFF_TTL_MS = Number(process.env.HG_HANDOFF_TTL_MS || 120000);
+const WEB_ORIGIN = process.env.HG_WEB_ORIGIN || '';
 
-app.use(cors());
+app.use(
+  cors(
+    WEB_ORIGIN
+      ? {
+          origin: WEB_ORIGIN,
+        }
+      : undefined
+  )
+);
 app.use(express.json({ limit: '2mb' }));
 
 function randomToken(size = 24) {
