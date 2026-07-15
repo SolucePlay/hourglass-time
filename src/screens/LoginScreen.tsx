@@ -77,6 +77,9 @@ export default function LoginScreen({ onLoggedIn }: Props) {
   const [loading, setLoading] = useState(true);
   const [isCapturing, setIsCapturing] = useState(false);
   const capturedRef = useRef(false);
+  const pendingXsrfRef = useRef<string | null>(null);
+  const pendingJwtRef = useRef<string | null>(null);
+  const finalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [manualInput, setManualInput] = useState('');
   const [webStatus, setWebStatus] = useState('En attente de génération du QR...');
@@ -183,6 +186,14 @@ export default function LoginScreen({ onLoggedIn }: Props) {
     return () => clearInterval(interval);
   }, [handoff, onLoggedIn, relayBase, signIn]);
 
+  useEffect(() => {
+    return () => {
+      if (finalizeTimerRef.current) {
+        clearTimeout(finalizeTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleMessage = useCallback(
     async (event: WebViewMessageEvent) => {
       try {
@@ -215,13 +226,32 @@ export default function LoginScreen({ onLoggedIn }: Props) {
           }
         }
 
-        const signInToken = bearerJwt || xsrf;
-        if (signInToken) {
-          capturedRef.current = true;
-          setIsCapturing(true); // Détruit la webview instantanément
+        if (xsrf) pendingXsrfRef.current = xsrf;
+        if (bearerJwt) pendingJwtRef.current = bearerJwt;
 
-          await signIn(signInToken);
+        const tryFinalize = async () => {
+          if (capturedRef.current) return;
+          const finalToken = pendingJwtRef.current || pendingXsrfRef.current;
+          if (!finalToken) return;
+
+          capturedRef.current = true;
+          setIsCapturing(true);
+          await signIn(finalToken);
           onLoggedIn();
+        };
+
+        // If Bearer arrives, complete immediately; otherwise wait a bit for it.
+        if (pendingJwtRef.current) {
+          if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+          await tryFinalize();
+          return;
+        }
+
+        if (pendingXsrfRef.current) {
+          if (finalizeTimerRef.current) clearTimeout(finalizeTimerRef.current);
+          finalizeTimerRef.current = setTimeout(() => {
+            void tryFinalize();
+          }, 1200);
         }
       } catch (e) {}
     },
