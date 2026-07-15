@@ -16,7 +16,7 @@ const INJECTED_JS = `
     try {
       if (!value) return null;
       var text = String(value);
-      var match = text.match(/eyJ[\w-]*\.[\w-]*\.[\w-]*/);
+      var match = text.match(/eyJ[\\w-]*\\.[\\w-]*\\.[\\w-]*/);
       return match ? match[0] : null;
     } catch (e) {
       return null;
@@ -73,6 +73,7 @@ const INJECTED_JS = `
 
   var originalFetch = window.fetch;
   window.fetch = function (input, init) {
+    var fetchMeta = {};
     try {
       var headers = (init && init.headers) || (input && input.headers);
       var headerObj = {};
@@ -82,12 +83,45 @@ const INJECTED_JS = `
       }
       post('fetch', { headers: headerObj });
       reportJwtCandidate(JSON.stringify(headerObj), 'fetch_headers');
+      fetchMeta = {
+        url: (typeof input === 'string' ? input : (input && input.url)) || '',
+      };
     } catch (e) {}
-    return originalFetch.apply(this, arguments);
+    return originalFetch.apply(this, arguments).then(function (response) {
+      try {
+        var authHeader = response && response.headers && response.headers.get
+          ? response.headers.get('authorization') || response.headers.get('Authorization')
+          : null;
+        reportJwtCandidate(authHeader, 'fetch_response_authorization');
+      } catch (e) {}
+
+      try {
+        if (response && response.clone) {
+          response
+            .clone()
+            .text()
+            .then(function (text) {
+              reportJwtCandidate(text, 'fetch_response_body');
+              try {
+                var parsed = JSON.parse(text);
+                reportJwtCandidate(JSON.stringify(parsed), 'fetch_response_json');
+              } catch (e) {}
+            })
+            .catch(function () {});
+        }
+      } catch (e) {}
+
+      try {
+        reportJwtCandidate(fetchMeta.url, 'fetch_response_url');
+      } catch (e) {}
+
+      return response;
+    });
   };
 
   var originalOpen = XMLHttpRequest.prototype.open;
   var originalSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  var originalSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (method, url) {
     this.__hg_url = url;
     return originalOpen.apply(this, arguments);
@@ -100,6 +134,29 @@ const INJECTED_JS = `
       }
     } catch (e) {}
     return originalSetHeader.apply(this, arguments);
+  };
+
+  XMLHttpRequest.prototype.send = function () {
+    try {
+      this.addEventListener('readystatechange', function () {
+        try {
+          if (this.readyState !== 4) return;
+          reportJwtCandidate(this.responseURL, 'xhr_response_url');
+          var authHeader = null;
+          try {
+            authHeader = this.getResponseHeader('authorization') || this.getResponseHeader('Authorization');
+          } catch (e) {}
+          reportJwtCandidate(authHeader, 'xhr_response_authorization');
+          try {
+            if (typeof this.responseText === 'string' && this.responseText) {
+              reportJwtCandidate(this.responseText, 'xhr_response_text');
+            }
+          } catch (e) {}
+        } catch (e) {}
+      });
+    } catch (e) {}
+
+    return originalSend.apply(this, arguments);
   };
 
   try {
@@ -334,7 +391,7 @@ export default function LoginScreen({ onLoggedIn }: Props) {
         <Card>
           <Card.Title title="Connexion Web par QR" subtitle="Scanne avec l'application mobile" />
           <Card.Content>
-            <Text>1) Sur téléphone: Assemblée > Paramètres > Scanner QR connexion web.</Text>
+            <Text>1) Sur téléphone: ouvre Assemblée, puis Paramètres, puis Scanner QR connexion web.</Text>
             <Text>2) Scanne ce code depuis le téléphone connecté.</Text>
             <View style={styles.qrContainer}>
               {qrPayload ? <QRCode value={qrPayload} size={240} /> : <ActivityIndicator size="large" />}
