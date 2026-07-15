@@ -58,9 +58,27 @@ function buildHeaders({ jwt, xsrfToken }: AuthTokens): HeadersInit {
   return headers;
 }
 
+function buildHeadersWithForcedBearer({ jwt, xsrfToken }: AuthTokens): HeadersInit {
+  const headers = buildHeaders({ jwt, xsrfToken }) as Record<string, string>;
+  if (jwt) {
+    headers.Authorization = `Bearer ${jwt}`;
+  }
+  return headers;
+}
+
 export async function hgGet<T = any>(endpoint: string, auth: AuthTokens): Promise<T | null> {
   try {
-    const res = await fetch(`${getApiBaseUrl()}${endpoint}`, { headers: buildHeaders(auth) });
+    const headers = buildHeaders(auth);
+    let res = await fetch(`${getApiBaseUrl()}${endpoint}`, { headers });
+
+    const sentAuthorization = Boolean((headers as Record<string, string>).Authorization);
+    if (res.status === 401 && !sentAuthorization && auth.jwt) {
+      // Some deployments need Bearer even when token is not a JWT-shaped string.
+      res = await fetch(`${getApiBaseUrl()}${endpoint}`, {
+        headers: buildHeadersWithForcedBearer(auth),
+      });
+    }
+
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -70,11 +88,22 @@ export async function hgGet<T = any>(endpoint: string, auth: AuthTokens): Promis
 
 export async function hgPut(endpoint: string, auth: AuthTokens, payload: unknown): Promise<number> {
   try {
-    const res = await fetch(`${getApiBaseUrl()}${endpoint}`, {
+    const headers = buildHeaders(auth);
+    let res = await fetch(`${getApiBaseUrl()}${endpoint}`, {
       method: 'PUT',
-      headers: buildHeaders(auth),
+      headers,
       body: JSON.stringify(payload),
     });
+
+    const sentAuthorization = Boolean((headers as Record<string, string>).Authorization);
+    if (res.status === 401 && !sentAuthorization && auth.jwt) {
+      res = await fetch(`${getApiBaseUrl()}${endpoint}`, {
+        method: 'PUT',
+        headers: buildHeadersWithForcedBearer(auth),
+        body: JSON.stringify(payload),
+      });
+    }
+
     return res.status;
   } catch {
     return 500;

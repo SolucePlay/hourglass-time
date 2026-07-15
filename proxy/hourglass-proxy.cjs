@@ -21,6 +21,13 @@ app.use(
 );
 app.use(express.json({ limit: '2mb' }));
 
+app.use('/auth-handoff', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 function randomToken(size = 24) {
   return crypto.randomBytes(size).toString('hex');
 }
@@ -101,11 +108,13 @@ app.get('/auth-handoff/status/:id', (req, res) => {
   }
 
   if (item.status !== 'ready' || !item.auth) {
+    res.removeHeader('ETag');
     return res.json({ status: 'pending', expiresAt: item.expiresAt });
   }
 
   const auth = item.auth;
   handoffs.delete(id);
+  res.removeHeader('ETag');
   return res.json({ status: 'ready', auth });
 });
 
