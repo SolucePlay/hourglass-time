@@ -187,20 +187,38 @@ export default function LoginScreen({ onLoggedIn }: Props) {
         const data = JSON.parse(event.nativeEvent.data);
         if (capturedRef.current) return;
 
-        let xsrf = null;
+        let xsrf: string | null = null;
+        let bearerJwt: string | null = null;
+
+        const readBearer = (value?: string) => {
+          if (!value) return null;
+          const match = String(value).match(/^Bearer\s+(.+)$/i);
+          return match?.[1] ?? null;
+        };
+
         if (data.type === 'fetch') {
-          xsrf = data.payload?.headers?.['X-Hourglass-XSRF-Token'] || data.payload?.headers?.['x-hourglass-xsrf-token'];
+          xsrf =
+            data.payload?.headers?.['X-Hourglass-XSRF-Token'] ||
+            data.payload?.headers?.['x-hourglass-xsrf-token'];
+          bearerJwt =
+            readBearer(data.payload?.headers?.Authorization) ||
+            readBearer(data.payload?.headers?.authorization);
         } else if (data.type === 'xhr_header') {
-          if (data.payload?.name?.toLowerCase() === 'x-hourglass-xsrf-token') {
+          const headerName = String(data.payload?.name || '').toLowerCase();
+          if (headerName === 'x-hourglass-xsrf-token') {
             xsrf = data.payload?.value;
+          }
+          if (headerName === 'authorization') {
+            bearerJwt = readBearer(data.payload?.value);
           }
         }
 
-        if (xsrf) {
+        const signInToken = bearerJwt || xsrf;
+        if (signInToken) {
           capturedRef.current = true;
           setIsCapturing(true); // Détruit la webview instantanément
-          
-          await signIn(xsrf);
+
+          await signIn(signInToken);
           onLoggedIn();
         }
       } catch (e) {}
