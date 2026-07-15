@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, TextInput, View } from 'react-native';
-import QRCode from 'react-native-qrcode-svg';
 import { Button, Card, Text, useTheme } from 'react-native-paper';
+import QRCode from 'react-native-qrcode-svg';
 import { getRelayBaseUrl } from '../api/hourglass';
 import { useAuth } from '../context/AuthContext';
 
