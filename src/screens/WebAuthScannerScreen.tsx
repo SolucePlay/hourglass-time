@@ -31,7 +31,7 @@ export default function WebAuthScannerScreen() {
       const normalizedCode = code.replace(/\s+/g, '').trim();
 
       if (!relayBase) {
-        setMessage('Proxy absent. Vérifie EXPO_PUBLIC_HG_PROXY_BASE_URL puis relance l\'app web.');
+        setMessage('Proxy absent. Vérifie EXPO_PUBLIC_HG_PROXY_BASE_URL puis relance l\'application.');
         return;
       }
 

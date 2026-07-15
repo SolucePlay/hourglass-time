@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 
 const DIRECT_BASE_URL = 'https://app.hourglass-app.com/api/v0.2';
+const DEFAULT_RELAY_BASE_URL = 'https://hourglass-proxy.onrender.com';
 
 export interface AuthTokens {
   jwt: string;
@@ -36,9 +37,10 @@ function getApiBaseUrl(): string {
 
 export function getRelayBaseUrl(): string | null {
   const proxyBase = process.env.EXPO_PUBLIC_HG_PROXY_BASE_URL;
-  if (!proxyBase) return null;
+  const rawBase = proxyBase || DEFAULT_RELAY_BASE_URL;
+  if (!rawBase) return null;
 
-  const normalized = normalizeProxyBaseForWeb(proxyBase);
+  const normalized = normalizeProxyBaseForWeb(rawBase);
   return normalized.replace(/\/api\/v0\.2\/?$/, '');
 }
 
@@ -127,7 +129,7 @@ export function getCurrentWeek(): { monday: string; sunday: string } {
 let whoamiCache: any = null;
 let whoamiPromise: Promise<any | null> | null = null;
 let whoamiLastFailureAt = 0;
-const WHOAMI_FAILURE_COOLDOWN_MS = 15000;
+const WHOAMI_FAILURE_COOLDOWN_MS = 120000;
 
 export async function getWhoami(auth: AuthTokens, force = false): Promise<any | null> {
   if (whoamiCache && !force) return whoamiCache;

@@ -13,10 +13,16 @@ export default function WeekendScreen() {
   const theme = useTheme();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedWeekDate, setSelectedWeekDate] = useState<Date>(new Date());
-  const { sunday } = getWeekForDate(selectedWeekDate);
+  const [selectedWeekDate, setSelectedWeekDate] = useState<Date | null>(null);
+  const sunday = selectedWeekDate ? getWeekForDate(selectedWeekDate).sunday : '';
+
+  useEffect(() => {
+    // Initialize on client after mount to keep SSR and hydration output stable.
+    setSelectedWeekDate(new Date());
+  }, []);
 
   const goToPreviousWeek = () => {
+    if (!selectedWeekDate) return;
     setLoading(true);
     const newDate = new Date(selectedWeekDate);
     newDate.setDate(newDate.getDate() - 7);
@@ -24,6 +30,7 @@ export default function WeekendScreen() {
   };
 
   const goToNextWeek = () => {
+    if (!selectedWeekDate) return;
     setLoading(true);
     const newDate = new Date(selectedWeekDate);
     newDate.setDate(newDate.getDate() + 7);
@@ -37,7 +44,7 @@ export default function WeekendScreen() {
 
   useEffect(() => {
     (async () => {
-      if (!jwt || !xsrfToken) return;
+      if (!jwt || !xsrfToken || !sunday) return;
       const result = await hgGet(`/scheduling/wm/schedule/view/${sunday}?lgroup=${LGROUP}`, {
         jwt,
         xsrfToken,
