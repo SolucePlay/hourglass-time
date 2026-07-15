@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, TextInput, View } from 'react-native';
 import { Button, Card, Text, useTheme } from 'react-native-paper';
-import QRCode from 'react-native-qrcode-svg';
 import { getRelayBaseUrl } from '../api/hourglass';
 import { useAuth } from '../context/AuthContext';
 
@@ -174,18 +173,10 @@ interface Props {
   onLoggedIn: () => void;
 }
 
-type HandoffPayload = {
-  type: 'hourglass-web-auth';
-  version: 1;
-  submitUrl: string;
-  submitToken: string;
-  expiresAt: number;
-};
-
-type HandoffSession = {
-  id: string;
-  submitToken: string;
+type CodeSession = {
+  sessionId: string;
   pollToken: string;
+  code: string;
   expiresAt: number;
 };
 
@@ -205,52 +196,41 @@ export default function LoginScreen({ onLoggedIn }: Props) {
   const finalizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [manualInput, setManualInput] = useState('');
-  const [webStatus, setWebStatus] = useState('En attente de génération du QR...');
+  const [webStatus, setWebStatus] = useState('En attente de génération du code...');
   const [webBusy, setWebBusy] = useState(false);
-  const [handoff, setHandoff] = useState<HandoffSession | null>(null);
+  const [codeSession, setCodeSession] = useState<CodeSession | null>(null);
 
   const relayBase = useMemo(() => getRelayBaseUrl(), []);
 
-  const qrPayload = useMemo(() => {
-    if (!relayBase || !handoff) return null;
-
-    const payload: HandoffPayload = {
-      type: 'hourglass-web-auth',
-      version: 1,
-      submitUrl: `${relayBase}/auth-handoff/submit/${handoff.id}`,
-      submitToken: handoff.submitToken,
-      expiresAt: handoff.expiresAt,
-    };
-
-    return JSON.stringify(payload);
-  }, [relayBase, handoff]);
-
-  const createHandoff = useCallback(async () => {
+  const createCodeSession = useCallback(async () => {
     if (!relayBase) {
       setWebStatus('Proxy absent. Configure EXPO_PUBLIC_HG_PROXY_BASE_URL puis relance Expo web.');
       return;
     }
 
     setWebBusy(true);
-    setWebStatus('Génération du QR...');
+    setWebStatus('Génération du code...');
     try {
-      const response = await fetch(`${relayBase}/auth-handoff/create`, { method: 'POST' });
+      const response = await fetch(`${relayBase}/auth-code/create`, {
+        method: 'POST',
+        cache: 'no-store',
+      });
       const data = await response.json();
 
       if (!response.ok) {
         throw new Error(String(data?.error || 'create_failed'));
       }
 
-      setHandoff({
-        id: String(data.id),
-        submitToken: String(data.submitToken),
+      setCodeSession({
+        sessionId: String(data.sessionId),
         pollToken: String(data.pollToken),
+        code: String(data.code),
         expiresAt: Number(data.expiresAt),
       });
-      setWebStatus('Scanne le QR avec l\'application mobile déjà connectée.');
+      setWebStatus('Entre ce code sur le téléphone déjà connecté.');
     } catch (error) {
-      setWebStatus(`Erreur QR: ${error instanceof Error ? error.message : String(error)}`);
-      setHandoff(null);
+      setWebStatus(`Erreur code: ${error instanceof Error ? error.message : String(error)}`);
+      setCodeSession(null);
     } finally {
       setWebBusy(false);
     }
@@ -265,27 +245,29 @@ export default function LoginScreen({ onLoggedIn }: Props) {
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
-    createHandoff();
-  }, [createHandoff]);
+    createCodeSession();
+  }, [createCodeSession]);
 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
-    if (!relayBase || !handoff) return;
+    if (!relayBase || !codeSession) return;
 
     const interval = setInterval(async () => {
-      if (Date.now() > handoff.expiresAt) {
-        setWebStatus('QR expiré. Regénère un nouveau code.');
+      if (Date.now() > codeSession.expiresAt) {
+        setWebStatus('Code expiré. Génère un nouveau code.');
         return;
       }
 
       try {
-        const pollUrl = `${relayBase}/auth-handoff/status/${handoff.id}?pollToken=${encodeURIComponent(handoff.pollToken)}`;
-        const response = await fetch(pollUrl);
+        const pollUrl = `${relayBase}/auth-code/status/${codeSession.sessionId}?pollToken=${encodeURIComponent(codeSession.pollToken)}`;
+        const response = await fetch(pollUrl, { cache: 'no-store' });
+
+        if (response.status === 304) return;
         const data = await response.json();
 
         if (!response.ok) {
-          if (data?.error === 'handoff_not_found_or_expired') {
-            setWebStatus('Session expirée. Regénère le QR.');
+          if (data?.error === 'session_not_found_or_expired') {
+            setWebStatus('Session expirée. Génère un nouveau code.');
             return;
           }
           return;
@@ -307,7 +289,7 @@ export default function LoginScreen({ onLoggedIn }: Props) {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [handoff, onLoggedIn, relayBase, signIn]);
+  }, [codeSession, onLoggedIn, relayBase, signIn]);
 
   useEffect(() => {
     return () => {
@@ -395,21 +377,25 @@ export default function LoginScreen({ onLoggedIn }: Props) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background, padding: 16 }]}> 
         <Card>
-          <Card.Title title="Connexion Web par QR" subtitle="Scanne avec l'application mobile" />
+          <Card.Title title="Connexion Web par code" subtitle="Sans QR, sans caméra" />
           <Card.Content>
-            <Text>1) Sur téléphone: ouvre Assemblée, puis Paramètres, puis Scanner QR connexion web.</Text>
-            <Text>2) Scanne ce code depuis le téléphone connecté.</Text>
-            <View style={styles.qrContainer}>
-              {qrPayload ? <QRCode value={qrPayload} size={240} /> : <ActivityIndicator size="large" />}
+            <Text>1) Sur téléphone: ouvre Assemblée, puis Paramètres, puis Connexion web par code.</Text>
+            <Text>2) Entre ce code sur le téléphone connecté.</Text>
+            <View style={styles.codeContainer}>
+              {codeSession ? (
+                <Text style={styles.codeText}>{codeSession.code}</Text>
+              ) : (
+                <ActivityIndicator size="large" />
+              )}
             </View>
             <Text style={{ marginTop: 8 }}>{webStatus}</Text>
-            {handoff ? (
+            {codeSession ? (
               <Text style={{ marginTop: 4, color: theme.colors.onSurfaceVariant }}>
-                Expire à {new Date(handoff.expiresAt).toLocaleTimeString('fr-FR')}
+                Expire à {new Date(codeSession.expiresAt).toLocaleTimeString('fr-FR')}
               </Text>
             ) : null}
-            <Button mode="contained" onPress={createHandoff} loading={webBusy} style={{ marginTop: 12 }}>
-              Regénérer le QR
+            <Button mode="contained" onPress={createCodeSession} loading={webBusy} style={{ marginTop: 12 }}>
+              Générer un nouveau code
             </Button>
           </Card.Content>
         </Card>
@@ -464,11 +450,16 @@ export default function LoginScreen({ onLoggedIn }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   webview: { flex: 1 },
-  qrContainer: {
+  codeContainer: {
     marginTop: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
+    paddingVertical: 20,
+  },
+  codeText: {
+    fontSize: 46,
+    letterSpacing: 6,
+    fontWeight: '700',
   },
   input: {
     borderWidth: 1,

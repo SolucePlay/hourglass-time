@@ -100,7 +100,7 @@ function AssembleeStack() {
       <Stack.Screen
         name="web_auth_scanner"
         getComponent={() => require('../../src/screens/WebAuthScannerScreen').default}
-        options={{ title: 'Scanner QR web' }}
+        options={{ title: 'Connexion web par code' }}
       />
     </Stack.Navigator>
   );

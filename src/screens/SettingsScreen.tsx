@@ -229,17 +229,17 @@ export default function SettingsScreen() {
 
             {Platform.OS !== 'web' ? (
                 <Card>
-                    <Card.Title title="Connexion web" subtitle="Scanner pour connecter le PC" />
+                    <Card.Title title="Connexion web" subtitle="Code à 6 chiffres" />
                     <Card.Content>
                         <Text>
-                            Ouvre l'écran de scan puis vise le QR affiché sur la page de connexion web.
+                            Ouvre l'écran de connexion web mobile puis saisis le code affiché sur le PC.
                         </Text>
                         <Button
                             mode="contained"
                             style={{ marginTop: 12 }}
                             onPress={() => navigation.navigate('web_auth_scanner')}
                         >
-                            Scanner QR connexion web
+                            Entrer code connexion web
                         </Button>
                     </Card.Content>
                 </Card>

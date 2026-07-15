@@ -28,6 +28,13 @@ app.use('/auth-handoff', (_req, res, next) => {
   next();
 });
 
+app.use('/auth-code', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
 function randomToken(size = 24) {
   return crypto.randomBytes(size).toString('hex');
 }
@@ -40,11 +47,24 @@ function pickForwardHeaders(req) {
 }
 
 const handoffs = new Map();
+const codeSessions = new Map();
+const codeToSessionId = new Map();
+
+function generateCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
 
 function cleanupHandoffs() {
   const now = Date.now();
   for (const [id, value] of handoffs.entries()) {
     if (value.expiresAt <= now) handoffs.delete(id);
+  }
+
+  for (const [id, value] of codeSessions.entries()) {
+    if (value.expiresAt <= now) {
+      if (value.code) codeToSessionId.delete(value.code);
+      codeSessions.delete(id);
+    }
   }
 }
 
@@ -114,6 +134,96 @@ app.get('/auth-handoff/status/:id', (req, res) => {
 
   const auth = item.auth;
   handoffs.delete(id);
+  res.removeHeader('ETag');
+  return res.json({ status: 'ready', auth });
+});
+
+app.post('/auth-code/create', (_req, res) => {
+  cleanupHandoffs();
+
+  const sessionId = crypto.randomUUID();
+  const pollToken = randomToken(16);
+  const expiresAt = Date.now() + HANDOFF_TTL_MS;
+
+  let code = generateCode();
+  while (codeToSessionId.has(code)) {
+    code = generateCode();
+  }
+
+  const session = {
+    sessionId,
+    code,
+    pollToken,
+    expiresAt,
+    status: 'pending',
+    auth: null,
+  };
+
+  codeSessions.set(sessionId, session);
+  codeToSessionId.set(code, sessionId);
+
+  res.removeHeader('ETag');
+  return res.json({ sessionId, pollToken, code, expiresAt });
+});
+
+app.post('/auth-code/submit', (req, res) => {
+  cleanupHandoffs();
+
+  const { code, jwt, xsrfToken, userUuid } = req.body || {};
+  const normalizedCode = String(code || '').trim();
+  if (!normalizedCode) {
+    return res.status(400).json({ error: 'missing_code' });
+  }
+
+  const sessionId = codeToSessionId.get(normalizedCode);
+  if (!sessionId) {
+    return res.status(404).json({ error: 'invalid_or_expired_code' });
+  }
+
+  const session = codeSessions.get(sessionId);
+  if (!session) {
+    codeToSessionId.delete(normalizedCode);
+    return res.status(404).json({ error: 'invalid_or_expired_code' });
+  }
+
+  if (!jwt && !xsrfToken) {
+    return res.status(400).json({ error: 'missing_auth_payload' });
+  }
+
+  session.status = 'ready';
+  session.auth = {
+    jwt: String(jwt || xsrfToken || ''),
+    xsrfToken: String(xsrfToken || jwt || ''),
+    userUuid: userUuid ? String(userUuid) : null,
+  };
+
+  codeSessions.set(sessionId, session);
+  res.removeHeader('ETag');
+  return res.json({ ok: true, sessionId });
+});
+
+app.get('/auth-code/status/:sessionId', (req, res) => {
+  cleanupHandoffs();
+
+  const { sessionId } = req.params;
+  const session = codeSessions.get(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: 'session_not_found_or_expired' });
+  }
+
+  const pollToken = String(req.query.pollToken || '');
+  if (!pollToken || pollToken !== session.pollToken) {
+    return res.status(401).json({ error: 'invalid_poll_token' });
+  }
+
+  if (session.status !== 'ready' || !session.auth) {
+    res.removeHeader('ETag');
+    return res.json({ status: 'pending', expiresAt: session.expiresAt });
+  }
+
+  const auth = session.auth;
+  if (session.code) codeToSessionId.delete(session.code);
+  codeSessions.delete(sessionId);
   res.removeHeader('ETag');
   return res.json({ status: 'ready', auth });
 });
