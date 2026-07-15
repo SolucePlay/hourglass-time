@@ -46,6 +46,33 @@ function pickForwardHeaders(req) {
   return headers;
 }
 
+async function validateAuthAgainstWhoami(auth) {
+  const jwt = String(auth?.jwt || '').trim();
+  const xsrfToken = String(auth?.xsrfToken || '').trim();
+  const bearer = jwt || xsrfToken;
+
+  if (!bearer && !xsrfToken) {
+    return false;
+  }
+
+  const headers = {
+    Accept: 'application/json',
+  };
+
+  if (xsrfToken) headers['X-Hourglass-XSRF-Token'] = xsrfToken;
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+
+  try {
+    const response = await fetch(`${TARGET_BASE}${API_PREFIX}/fsreport/whoami`, {
+      method: 'GET',
+      headers,
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 const handoffs = new Map();
 const codeSessions = new Map();
 const codeToSessionId = new Map();
@@ -166,7 +193,7 @@ app.post('/auth-code/create', (_req, res) => {
   return res.json({ sessionId, pollToken, code, expiresAt });
 });
 
-app.post('/auth-code/submit', (req, res) => {
+app.post('/auth-code/submit', async (req, res) => {
   cleanupHandoffs();
 
   const { code, jwt, xsrfToken, userUuid } = req.body || {};
@@ -191,11 +218,19 @@ app.post('/auth-code/submit', (req, res) => {
   }
 
   session.status = 'ready';
-  session.auth = {
+  const authPayload = {
     jwt: String(jwt || xsrfToken || ''),
     xsrfToken: String(xsrfToken || jwt || ''),
     userUuid: userUuid ? String(userUuid) : null,
   };
+
+  const isValidForWhoami = await validateAuthAgainstWhoami(authPayload);
+  if (!isValidForWhoami) {
+    return res.status(401).json({ error: 'invalid_auth_for_whoami' });
+  }
+
+  session.status = 'ready';
+  session.auth = authPayload;
 
   codeSessions.set(sessionId, session);
   res.removeHeader('ETag');
